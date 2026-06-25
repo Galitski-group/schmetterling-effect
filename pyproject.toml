@@ -22,7 +22,13 @@ classifiers = [
 
 dependencies = [
     "numpy",
+    "matplotlib",
     "pytket",
+    "pytket-quantinuum",
+    "pytket-qiskit",
+    "pytket-pecos",
+    "qiskit-aer",
+    "pecos",
     "qnexus",
 ]
 

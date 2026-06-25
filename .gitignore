@@ -2,7 +2,8 @@
 *egg*
 *__pycache__
 *.pytest*
-.brick
+.butterfly
 *out
 *err
-data/*
+partials/*
+tmp/*
