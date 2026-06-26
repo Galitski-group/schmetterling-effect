@@ -6,6 +6,101 @@ from pytket import Circuit
 from pytket.extensions.quantinuum import QuantinuumBackend
 
 
+def build_aer_noise_model(
+    p1q: float | None = 1e-3,
+    p2q: float | None = 1e-2,
+    pm:  float | None = 1e-2,
+):
+    """
+    Build a simple all-qubit noise model for AerBackend.
+
+    Parameters
+    ----------
+    p1q : depolarizing error rate on single-qubit gates (None = no gate noise)
+    p2q : depolarizing error rate on two-qubit gates    (None = no gate noise)
+    pm  : symmetric readout bitflip probability          (None = no readout noise)
+
+    Returns
+    -------
+    qiskit_aer.noise.NoiseModel  — pass directly to AerBackend(noise_model=...)
+
+    Typical hardware values (H-series class):
+        p1q ~ 1e-4,  p2q ~ 1e-3,  pm ~ 5e-3
+    """
+    from qiskit_aer.noise import NoiseModel, depolarizing_error, ReadoutError
+
+    nm = NoiseModel()
+
+    if p1q:
+        err = depolarizing_error(p1q, 1)
+        nm.add_all_qubit_quantum_error(err, ["u1", "u2", "u3", "rx", "ry", "rz", "h", "x", "y", "z", "s", "t"])
+
+    if p2q:
+        err = depolarizing_error(p2q, 2)
+        nm.add_all_qubit_quantum_error(err, ["cx", "cz", "ecr", "rzz"])
+
+    if pm:
+        ro_err = ReadoutError([[1 - pm, pm], [pm, 1 - pm]])
+        nm.add_all_qubit_readout_error(ro_err)
+
+    return nm
+
+
+def _sample_cartan(rng) -> tuple[float, float, float]:
+    """
+    Sample (cx, cy, cz) from the Haar-induced Weyl-chamber density via
+    rejection sampling.  Uses `rng` exclusively for reproducibility.
+    """
+    half_pi = np.pi / 2
+    while True:
+        ux, uy, uz, ua = rng.uniform(0, 1, size=4)
+        cx = half_pi * ux ** (1 / 3)
+        cy = cx * np.sqrt(uy)
+        cz = cy * (2 * uz - 1)
+        w = abs(
+            np.sin(cx + cy) * np.sin(cx - cy)
+            * np.sin(cx + cz) * np.sin(cx - cz)
+            * np.sin(cy + cz) * np.sin(cy - cz)
+        )
+        if ua < 4 * w:
+            return cx, cy, cz
+
+
+def _haar_su4_params(rng) -> tuple:
+    """
+    Sample parameters for a Haar-random SU(4) in native TK1+TK2 form.
+
+    The KAK decomposition gives:
+        U = (TK1_post_i ⊗ TK1_post_j) · TK2(t1,t2,t3) · (TK1_pre_i ⊗ TK1_pre_j)
+
+    TK1(a,b,c) = Rz(aπ)·Rx(bπ)·Rz(cπ)  (pytket half-turns)
+    TK2(t1,t2,t3) = exp(-iπ/2 (t1·XX + t2·YY + t3·ZZ))
+
+    Inverse (for U†): reverse layer order and negate all angles:
+        TK1(a,b,c)† = TK1(-c,-b,-a)
+        TK2(t1,t2,t3)† = TK2(-t1,-t2,-t3)
+
+    Returns (pre_i, pre_j, tk2, post_i, post_j) where each is a 3-tuple
+    of half-turn angles.
+    """
+    def _su2_tk1(rng_):
+        # Haar-random SU(2) as ZYZ, converted to TK1's ZXZ parameterisation.
+        # Rz(φ)·Ry(θ)·Rz(λ) = Rz(φ+π/2)·Rx(θ)·Rz(λ-π/2)
+        #                     = TK1(φ/π+½, θ/π, λ/π-½)
+        phi   = rng_.uniform(0, 2 * np.pi)
+        lam   = rng_.uniform(0, 2 * np.pi)
+        theta = np.arccos(1 - 2 * rng_.uniform(0, 1))
+        return phi / np.pi + 0.5, theta / np.pi, lam / np.pi - 0.5
+
+    pre_i  = _su2_tk1(rng)
+    pre_j  = _su2_tk1(rng)
+    cx, cy, cz = _sample_cartan(rng)
+    post_i = _su2_tk1(rng)
+    post_j = _su2_tk1(rng)
+    # TK2 angles in half-turns: TK2(cx/π,cy/π,cz/π) = Rxx(cx)·Ryy(cy)·Rzz(cz)
+    return pre_i, pre_j, (cx / np.pi, cy / np.pi, cz / np.pi), post_i, post_j
+
+
 def calculate_hamming_distance_pdf(data: dict) -> tuple[list, list]:
     """
     Calculates the hamming distance between number of bitstrings and
@@ -172,14 +267,10 @@ def generate_time_reversal_breaking_random_brick_wall(
 
         pairs_data = []
         for i, j in pairs_in_layer:
-            a, b, g = rng.normal(size=3)
-            ai, bi, ci = rng.uniform(0, 2, size=3)  # TK1 angles for qubit i
-            aj, bj, cj = rng.uniform(0, 2, size=3)  # TK1 angles for qubit j
-            pairs_data.append((
-                a, b, g, i, j, ai, bi, ci, aj, bj, cj,
-                i in chosen_u, j in chosen_u,
-                i in chosen_ud, j in chosen_ud,
-            ))
+            pre_i, pre_j, tk2, post_i, post_j = _haar_su4_params(rng)
+            pairs_data.append((pre_i, pre_j, tk2, post_i, post_j, i, j,
+                                i in chosen_u, j in chosen_u,
+                                i in chosen_ud, j in chosen_ud))
 
         forward.append(pairs_data)
 
@@ -202,14 +293,17 @@ def generate_time_reversal_breaking_random_brick_wall(
         if op != "I":
             getattr(qc, op)(q)
 
-    # Build U: gates then U-channel measurements for paired qubits only.
+    # Build U: Haar SU(4) via native TK1+TK2 gates, then U-channel measurements.
+    # TK1(a,b,c) = Rz(aπ)·Rx(bπ)·Rz(cπ);  TK2 = KAK interaction term.
     # Unpaired boundary qubits are idle in odd layers and never measured.
     # All mid-circuit outcomes go to scratch bit 0 (overwritten, never read back).
     for pairs_data in forward:
-        for a, b, g, i, j, ai, bi, ci, aj, bj, cj, mi_u, mj_u, _, _ in pairs_data:
-            qc.TK2(a, b, g, i, j)
-            qc.TK1(ai, bi, ci, i)
-            qc.TK1(aj, bj, cj, j)
+        for pre_i, pre_j, tk2, post_i, post_j, i, j, mi_u, mj_u, _, _ in pairs_data:
+            qc.TK1(*pre_i, i)
+            qc.TK1(*pre_j, j)
+            qc.TK2(*tk2, i, j)
+            qc.TK1(*post_i, i)
+            qc.TK1(*post_j, j)
             if mi_u:
                 qc.Measure(i, 0)
             if mj_u:
@@ -229,12 +323,15 @@ def generate_time_reversal_breaking_random_brick_wall(
     if add_barrier:
         qc.add_barrier(qubits=barrier_sequence, bits=all_bits)
 
-    # Apply U†: inverse gates then U†-channel measurements (independent of U).
+    # Apply U†: reverse layer order, negate all angles.
+    # TK1(a,b,c)† = TK1(-c,-b,-a);  TK2(t1,t2,t3)† = TK2(-t1,-t2,-t3)
     for pairs_data in reversed(forward):
-        for a, b, g, i, j, ai, bi, ci, aj, bj, cj, _, _, mi_ud, mj_ud in reversed(pairs_data):
-            qc.TK1(-cj, -bj, -aj, j)
-            qc.TK1(-ci, -bi, -ai, i)
-            qc.TK2(-a, -b, -g, i, j)
+        for pre_i, pre_j, tk2, post_i, post_j, i, j, _, _, mi_ud, mj_ud in reversed(pairs_data):
+            qc.TK1(-post_i[2], -post_i[1], -post_i[0], i)
+            qc.TK1(-post_j[2], -post_j[1], -post_j[0], j)
+            qc.TK2(-tk2[0], -tk2[1], -tk2[2], i, j)
+            qc.TK1(-pre_i[2], -pre_i[1], -pre_i[0], i)
+            qc.TK1(-pre_j[2], -pre_j[1], -pre_j[0], j)
             if mj_ud:
                 qc.Measure(j, 0)
             if mi_ud:
@@ -409,6 +506,7 @@ def sweep_over_all_disorder_axes(
     base_seed: int = 42,
     meas_seed: int | None = None,
     record_every: int = 5,
+    L_values: list[int] | None = None,
     pert_site: int | None = None,
     pert_op: str = "measure",
     probe_site: int | None = None,
@@ -437,6 +535,9 @@ def sweep_over_all_disorder_axes(
     p acts as a pure threshold. Defaults to base_seed + 1 to keep the
     three disorder axes (gates, init, meas) independent.
     record_every (int): Only record/execute at L = record_every, 2*record_every, ...
+    Ignored when L_values is provided.
+    L_values (list[int]): Explicit list of layer counts to evaluate (e.g. [1,2,5,10,25]).
+    When given, overrides L_max and record_every.
     pert_site (int): Perturbation qubit. Defaults to W // 2 per system size.
     pert_op (str): Perturbation type ("measure" or a single-qubit gate name).
     probe_site (int): Probe qubit. Defaults to 0 per system size.
@@ -462,7 +563,8 @@ def sweep_over_all_disorder_axes(
     _add_barrier = isinstance(backend, QuantinuumBackend)
     print(f"Backend: {backend}  |  add_barrier: {_add_barrier}")
 
-    L_values = list(range(record_every, L_max + 1, record_every))
+    if L_values is None:
+        L_values = list(range(record_every, L_max + 1, record_every))
     _meas_base = meas_seed if meas_seed is not None else base_seed + 1
 
     all_stats: dict[int, dict] = {}
@@ -537,6 +639,7 @@ def sweep_single_shot_disorder(
     n_realizations: int = 400,
     base_seed: int = 42,
     record_every: int = 5,
+    L_values: list[int] | None = None,
     pert_site: int | None = None,
     pert_op: str = "measure",
     probe_site: int | None = None,
@@ -566,6 +669,9 @@ def sweep_single_shot_disorder(
     U meas sites  → (base_seed + 2) * 10_000_000 + r
     U† meas sites → (base_seed + 3) * 10_000_000 + r
     record_every (int): Only record/execute at L = record_every, 2*record_every, ...
+    Ignored when L_values is provided.
+    L_values (list[int]): Explicit list of layer counts to evaluate (e.g. [1,2,5,10,25]).
+    When given, overrides L_max and record_every.
     pert_site, pert_op, probe_site, probe_angle: forwarded to the generator.
     backend / device_name: same semantics as sweep_over_all_disorder_axes.
 
@@ -586,7 +692,8 @@ def sweep_single_shot_disorder(
     _add_barrier = isinstance(backend, QuantinuumBackend)
     print(f"Backend: {backend}  |  add_barrier: {_add_barrier}")
 
-    L_values = list(range(record_every, L_max + 1, record_every))
+    if L_values is None:
+        L_values = list(range(record_every, L_max + 1, record_every))
     all_stats: dict[int, dict] = {}
 
     for W in N_values:
