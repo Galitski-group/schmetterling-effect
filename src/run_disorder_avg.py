@@ -75,7 +75,7 @@ DATE = f"{datetime.datetime.now():%Y_%m_%d_%H:%M:%S}"
 P_VALUES = [0.0, 0.02]  # measurement rate threshold
 L_MAX = 20  # max layers
 N_VALUES = [6]  # system sizes (even, 8–16)
-N_REALIZATIONS = 250  # single-shot mode: independent circuits per (N, p, L)
+N_REALIZATIONS = 1000  # single-shot mode: independent circuits per (N, p, L)
 N_SHOTS = 100  # multi-shot mode: shots per fixed circuit
 N_CIRCUITS = 5  # multi-shot mode: gate-angle realizations
 N_INIT_STATES = 5  # multi-shot mode: initial-state realizations
@@ -91,15 +91,21 @@ L_VALUES: list[int] | None = [
 ]  # explicit L list; overrides L_MAX + RECORD_EVERY when set
 PERT_OP = "X"  # perturbation gate
 PROBE_ANGLE = 0.0  # Ry(π/2) on probe qubit
+OPTIMISATION_LEVEL = 0  # pytket compilation level: 0 = minimal, 1 = light, 2 = full
 # DEVICE_NAME = "H2-1LE"  # uncomment for Quantinuum hardware
 DEVICE_NAME = None  # None → local AerBackend
 
 # ── Noise model (local AerBackend only; ignored when DEVICE_NAME is set) ──────
-# Set all three to None for ideal (noiseless) simulation.
+# All None → ideal (noiseless) simulation.  Mix and match as needed.
 # Typical H-series-class values: p1q=1e-4, p2q=1e-3, pm=5e-3
-NOISE_P1Q = None  # single-qubit gate depolarizing error rate
-NOISE_P2Q = None  # two-qubit gate depolarizing error rate
-NOISE_PM = None  # symmetric readout bitflip probability
+#                                 T1=1e-3, T2=1e-3 (seconds)
+NOISE_P1Q    = None   # single-qubit gate depolarizing error rate
+NOISE_P2Q    = None   # two-qubit gate depolarizing error rate
+NOISE_PM     = None   # symmetric readout bitflip probability
+NOISE_T1     = None   # longitudinal relaxation time T1 (seconds)
+NOISE_T2     = None   # transverse relaxation time  T2 (seconds; must be <= 2*T1)
+NOISE_T_1Q   = 50e-9  # single-qubit gate duration (seconds)
+NOISE_T_2Q   = 300e-9 # two-qubit gate duration    (seconds)
 FIGURE_DIR = "../figs/"
 FIGURE_PATH_C = FIGURE_DIR + f"C_vs_t_{DATE}.png"
 FIGURE_PATH_CV = FIGURE_DIR + f"cv_vs_t_{DATE}.png"
@@ -142,9 +148,16 @@ def _build_backend():
 
     from pytket.extensions.qiskit import AerBackend
 
-    if any(v is not None for v in (NOISE_P1Q, NOISE_P2Q, NOISE_PM)):
-        noise_model = build_aer_noise_model(p1q=NOISE_P1Q, p2q=NOISE_P2Q, pm=NOISE_PM)
-        print(f"Noisy AerBackend  p1q={NOISE_P1Q}  p2q={NOISE_P2Q}  pm={NOISE_PM}")
+    if any(v is not None for v in (NOISE_P1Q, NOISE_P2Q, NOISE_PM, NOISE_T1, NOISE_T2)):
+        noise_model = build_aer_noise_model(
+            p1q=NOISE_P1Q, p2q=NOISE_P2Q, pm=NOISE_PM,
+            T1=NOISE_T1, T2=NOISE_T2,
+            t_gate_1q=NOISE_T_1Q, t_gate_2q=NOISE_T_2Q,
+        )
+        print(
+            f"Noisy AerBackend  p1q={NOISE_P1Q}  p2q={NOISE_P2Q}  pm={NOISE_PM}  "
+            f"T1={NOISE_T1}  T2={NOISE_T2}  t_1q={NOISE_T_1Q}  t_2q={NOISE_T_2Q}"
+        )
         return AerBackend(noise_model=noise_model)
 
     return AerBackend()
@@ -649,6 +662,7 @@ def run_sequential(mode: str = "single_shot") -> None:
             pert_op=PERT_OP,
             probe_angle=PROBE_ANGLE,
             device_name=DEVICE_NAME,
+            optimisation_level=OPTIMISATION_LEVEL,
         )
     elif mode == "multi_shot":
         n_real = N_CIRCUITS * N_INIT_STATES
@@ -673,6 +687,7 @@ def run_sequential(mode: str = "single_shot") -> None:
             pert_op=PERT_OP,
             probe_angle=PROBE_ANGLE,
             device_name=DEVICE_NAME,
+            optimisation_level=OPTIMISATION_LEVEL,
         )
     else:
         raise ValueError(
@@ -697,8 +712,9 @@ def run_sequential(mode: str = "single_shot") -> None:
         )
         tm = ButterflyTransferMatrix(TM_NUM_QUBITS, bc_type=TM_BC_TYPE)
         tm_results = {
-            p: tm.compute_otoc(p, TM_TF, TM_PERT_SITE, TM_PROBE_SITE)
+            p: (t, C / 2)
             for p in _tm_p_values
+            for t, C in [tm.compute_otoc(p, TM_TF, TM_PERT_SITE, TM_PROBE_SITE)]
         }
         plot_tm_overlay(
             all_stats=all_stats,

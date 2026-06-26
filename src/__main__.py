@@ -7,41 +7,77 @@ from pytket.extensions.quantinuum import QuantinuumBackend
 
 
 def build_aer_noise_model(
-    p1q: float | None = 1e-3,
-    p2q: float | None = 1e-2,
-    pm:  float | None = 1e-2,
+    p1q: float | None = None,
+    p2q: float | None = None,
+    pm:  float | None = None,
+    T1:  float | None = None,
+    T2:  float | None = None,
+    t_gate_1q: float = 50e-9,
+    t_gate_2q: float = 300e-9,
 ):
     """
-    Build a simple all-qubit noise model for AerBackend.
+    Build an all-qubit noise model for AerBackend.
+
+    Depolarizing and thermal-relaxation (T1/T2) errors are composed per gate
+    when both are specified.  Either channel can be used alone by leaving the
+    other parameters as None.
 
     Parameters
     ----------
-    p1q : depolarizing error rate on single-qubit gates (None = no gate noise)
-    p2q : depolarizing error rate on two-qubit gates    (None = no gate noise)
-    pm  : symmetric readout bitflip probability          (None = no readout noise)
+    p1q      : depolarizing error rate on single-qubit gates (None = skip)
+    p2q      : depolarizing error rate on two-qubit gates    (None = skip)
+    pm       : symmetric readout bitflip probability          (None = skip)
+    T1       : longitudinal relaxation time in seconds        (None = skip)
+    T2       : transverse relaxation time in seconds          (None = skip)
+               Must satisfy T2 <= 2*T1 when both are given.
+    t_gate_1q: single-qubit gate duration in seconds (default 50 ns)
+    t_gate_2q: two-qubit gate duration in seconds    (default 300 ns)
 
     Returns
     -------
-    qiskit_aer.noise.NoiseModel  — pass directly to AerBackend(noise_model=...)
+    qiskit_aer.noise.NoiseModel
 
-    Typical hardware values (H-series class):
+    Typical H-series-class values:
         p1q ~ 1e-4,  p2q ~ 1e-3,  pm ~ 5e-3
+        T1  ~ 1e-3,  T2  ~ 1e-3   (1 ms coherence times)
+        t_gate_1q ~ 50e-9,  t_gate_2q ~ 300e-9
     """
-    from qiskit_aer.noise import NoiseModel, depolarizing_error, ReadoutError
+    from qiskit_aer.noise import (
+        NoiseModel, depolarizing_error, ReadoutError, thermal_relaxation_error,
+    )
+
+    if T1 is not None and T2 is not None and T2 > 2 * T1:
+        raise ValueError(f"T2 ({T2}) must be <= 2*T1 ({2*T1}) for a physical channel.")
 
     nm = NoiseModel()
+    _1q_gates = ["u1", "u2", "u3", "rx", "ry", "rz", "h", "x", "y", "z", "s", "t"]
+    _2q_gates = ["cx", "cz", "ecr", "rzz"]
 
-    if p1q:
-        err = depolarizing_error(p1q, 1)
-        nm.add_all_qubit_quantum_error(err, ["u1", "u2", "u3", "rx", "ry", "rz", "h", "x", "y", "z", "s", "t"])
+    def _compose(depol_err, relax_err):
+        if depol_err is not None and relax_err is not None:
+            return depol_err.compose(relax_err)
+        return depol_err if depol_err is not None else relax_err
 
-    if p2q:
-        err = depolarizing_error(p2q, 2)
-        nm.add_all_qubit_quantum_error(err, ["cx", "cz", "ecr", "rzz"])
+    relax_1q = (
+        thermal_relaxation_error(T1, T2, t_gate_1q)
+        if T1 is not None and T2 is not None else None
+    )
+    relax_2q = (
+        thermal_relaxation_error(T1, T2, t_gate_2q).expand(
+            thermal_relaxation_error(T1, T2, t_gate_2q)
+        )
+        if T1 is not None and T2 is not None else None
+    )
 
+    err_1q = _compose(depolarizing_error(p1q, 1) if p1q else None, relax_1q)
+    err_2q = _compose(depolarizing_error(p2q, 2) if p2q else None, relax_2q)
+
+    if err_1q is not None:
+        nm.add_all_qubit_quantum_error(err_1q, _1q_gates)
+    if err_2q is not None:
+        nm.add_all_qubit_quantum_error(err_2q, _2q_gates)
     if pm:
-        ro_err = ReadoutError([[1 - pm, pm], [pm, 1 - pm]])
-        nm.add_all_qubit_readout_error(ro_err)
+        nm.add_all_qubit_readout_error(ReadoutError([[1 - pm, pm], [pm, 1 - pm]]))
 
     return nm
 
@@ -349,6 +385,7 @@ def _run_circuits(
     backend,
     n_shots: int,
     tags: list[str] | None = None,
+    optimisation_level: int = 0,
 ) -> list[np.ndarray]:
     """
     Compile and execute circuits as a single batch on `backend`.
@@ -368,6 +405,9 @@ def _run_circuits(
     n_shots (int): Shots per circuit.
     tags (list[str]): Optional names for each circuit, one per entry in
     circuits. Used for portal tracking and log output.
+    optimisation_level (int): pytket compilation optimisation level (0, 1, or 2).
+    0 = minimal rewriting (preserve circuit structure); 1 = light peephole
+    optimisation; 2 = full gate-count reduction. Default is 0.
 
     Returns:
     list of np.ndarray of shape (n_shots, n_bits), one per input circuit.
@@ -380,10 +420,10 @@ def _run_circuits(
 
     backend_label = getattr(backend, "device_name", type(backend).__name__)
     tag_summary = tags[0] if tags else "unnamed"
-    print(f"[{backend_label}] compiling {len(circuits)} circuit(s)  tag={tag_summary!r}")
+    print(f"[{backend_label}] compiling {len(circuits)} circuit(s)  opt={optimisation_level}  tag={tag_summary!r}")
 
     compiled = [
-        backend.get_compiled_circuit(qc, optimisation_level=1) for qc in circuits
+        backend.get_compiled_circuit(qc, optimisation_level=optimisation_level) for qc in circuits
     ]
 
     print(f"[{backend_label}] submitting batch of {len(circuits)} circuit(s)  n_shots={n_shots}")
@@ -513,6 +553,7 @@ def sweep_over_all_disorder_axes(
     probe_angle: float = 0.5,
     backend=None,
     device_name: str | None = None,
+    optimisation_level: int = 0,
 ) -> dict[int, dict[str, dict[float, dict[int, float]]]]:
     """
     Top-level controller: disorder-averaged sweep over (p, T, N).
@@ -614,6 +655,7 @@ def sweep_over_all_disorder_axes(
                             backend,
                             n_shots,
                             tags=[f"{tag_base}_pert", f"{tag_base}_unpert"],
+                            optimisation_level=optimisation_level,
                         )
 
                         out_p = 1 - 2 * shots_p[:, probe_bit].astype(int)
@@ -646,6 +688,7 @@ def sweep_single_shot_disorder(
     probe_angle: float = 0.5,
     backend=None,
     device_name: str | None = None,
+    optimisation_level: int = 0,
 ) -> dict[int, dict[str, dict[float, dict[int, float]]]]:
     """
     Disorder-averaged sweep where every sample is a fully independent circuit
@@ -746,6 +789,7 @@ def sweep_single_shot_disorder(
                     1,
                     tags=[f"{tag}_r{r}_pert"   for r in range(n_realizations)]
                        + [f"{tag}_r{r}_unpert" for r in range(n_realizations)],
+                    optimisation_level=optimisation_level,
                 )
 
                 out_p = np.array([1 - 2 * int(s[0, probe_bit]) for s in all_shots[:n_realizations]])
