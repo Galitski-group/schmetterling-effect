@@ -27,7 +27,7 @@ _spec = importlib.util.spec_from_file_location("schmetterling", _src)
 _mod  = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-generate       = _mod.generate_time_reversal_breaking_random_brick_wall
+generate       = _mod.build_brickwall_otoc_circuit
 validate_nexus = _mod.validate_nexus_connection
 qnx            = _mod.qnx
 
@@ -218,7 +218,7 @@ def run_probe(
         qc = generate(
             L=L, W=W,
             unperturbed=True,
-            n_meas_total=0,
+            p=0.0,
             add_barrier=False,
             seed=base_seed,
             init_seed=base_seed,

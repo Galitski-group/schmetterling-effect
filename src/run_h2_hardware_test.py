@@ -27,8 +27,9 @@ QuantinuumBackend = _mod.QuantinuumBackend
 # ══════════════════════════════════════════════════════════════════════════════
 
 TOPOLOGY = "brickwall"  # "brickwall" or "bowtie"
+INIT_OPS: list[str] | None = None  # None → ["I","X","Y","Z"]; e.g. ["I","X"] for bowtie
 DEVICE_NAME = "H2-2"  # "H2-1" (hardware) or "H2-1E" (emulator)
-NEXUS_PROJECT = "schmetterling-effect"  # Nexus project (created if absent)
+NEXUS_PROJECT = "schmetterling-effect-test"  # Nexus project (created if absent)
 USE_BATCH = (
     False  # True = attempt_batching (requires org feature); False = standard queue
 )
@@ -78,6 +79,7 @@ if __name__ == "__main__":
             meas_seed=BASE_SEED + 2,
             meas_seed_ud=BASE_SEED + 3,
             add_barrier=True,
+            init_ops=INIT_OPS,
         )
         circuits += [
             build_otoc_circuit(**shared, unperturbed=False),

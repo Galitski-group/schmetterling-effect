@@ -1,136 +1,272 @@
-import numpy as np
-
-
-class TransferMatrix:
-    def __init__(
-        self,
-        probe_site: int,
-        pert_site: int,
-        num_qubits: int,
-        bc_type: str = "periodic",
-    ):
-        """
-        Attributes
-        ----------
-        num_qubits: (int) [Assumed to be even]
-        pert_site: (int)
-        probe_site: (int)
-        W: (numpy array)
-        bc_type: (str) Options are "periodic" or "open"
-
-        Methods
-        -------
-        Layer_Update(W_in,l,p)
-        """
-        assert num_qubits % 2 == 0, "# Qubits must be even"
-        self.num_qubits = num_qubits
-        self.pert_site = pert_site
-        self.probe_site = probe_site
-        self.W = np.zeros((2,) * self.num_qubits)
-        self.bc_type = bc_type
-
-    def update_layer(self, W_in: np.ndarray, t: int, p: float):
-        """
-        Updates the weights for one layer.
-
-        Inputs
-        ------
-            W_in: (numpy array)
-            Input weights tensor. It is in tensor form with N indices each taking on 2 values.
-
-            t: (int)
-            Layer number. It is only used to determine the parity of the layer.
-
-            p: (float)
-            Measurement strength (p in [0,1]).
-
-        Outputs
-        -------
-            W (numpy array)
-            Weights tensor after the layer update. It is in tensor form with N indices each taking on 2 values.
-        """
-        # Calculate the transfer matrix coefficients
-        a = 1 / 30 * (6 + 2 * p - p**2)
-        b = 4 / 15 * (3 - 4 * p + 2 * p**2)
-        c = 1 / 60 * p * (8 - 8 * p + 4 * p**2 - p**3)
-        d = 1 / 15 * (3 + 8 * (p - 1) ** 2 + 4 * (p - 1) ** 4)
-        W = W_in.copy()
-        # qubit number
-        N = W.ndim
-        # Sites for two-qubit gates to be applied to
-        # Sites for two-qubit gates to be applied to
-        if self.bc_type == "open":
-            if t % 2 == 0:
-                sites = [(i, i + 1) for i in range(0, N - 1, 2)]
-            else:
-                sites = [(i, i + 1) for i in range(1, N - 1, 2)]
-
-        elif self.bc_type == "periodic":
-            if N % 2 != 0:
-                raise ValueError("Periodic brickwall update currently requires even N.")
-
-            if t % 2 == 0:
-                sites = [(i, i + 1) for i in range(0, N - 1, 2)]
-            else:
-                sites = [(i, (i + 1) % N) for i in range(1, N, 2)]
-
-        else:
-            raise ValueError("self.bc must be either 'open' or 'periodic'.")
-        # apply all gates (i.e. update W)
-        for gate in sites:
-            i, j = gate
-            # Define the local update matrix that does the following
-            # 00->00, 10 or 01 -> a(00)+ b(11), 11 ->c (00) +d (11)
-            T = np.array(
-                [
-                    [1, a, a, c],
-                    [0, 0, 0, 0],
-                    [0, 0, 0, 0],
-                    [0, b, b, d],
-                ]
-            )
-            # Next apply the local update matrix, first move the i,j indices to the front
-            axes = [i, j] + [k for k in range(N) if k not in (i, j)]
-            W_perm = np.transpose(W, axes)
-            # reshape 1st two axes become size 4 (so we can apply the 4x4 T matrix)
-            W_temp1 = W_perm.reshape(4, -1)
-            # apply update matrix
-            W_temp2 = T @ W_temp1
-            # reshape back
-            # reshape back
-            W = W_temp2.reshape([2, 2] + list(W_perm.shape[2:]))
-            # invert permutation
-            inv_axes = np.argsort(axes)
-            W = np.transpose(W, inv_axes)
-        return W
-
-    def get_OTOC_from_weights(self, W, probe_site):
-        return W.sum(axis=tuple(i for i in range(W.ndim) if i != probe_site))[1]
-
-    def get_OTOC(self, p, tf, pert_site, probe_site):
-        # get variables
-        N = self.num_qubits
-        W = self.W.copy()
-        # List for the OTOC Values
-        F = []
-        # Apply the 1st perturbation. Assume this first step is an even layer.
-        if pert_site % 2 == 0:
-            i = pert_site
-            j = pert_site + 1
-        else:
-            i = pert_site - 1
-            j = pert_site
-        indx = [0] * N
-        indx[i] = 1
-        indx[j] = 1
-        # this particular 32/15 weight is for a pauli perturbation (no 1/2 out front convention)
-        W[tuple(indx)] += 32 / 15
-        F_val = self.OTOC_From_Weights(W, probe_site)
-        F.append(F_val)
-        for t in range(1, tf):
-            # Update the weights
-            W = self.Layer_Update(W, t, p)
-            # Calculate the OTOC
-            F_val = self.OTOC_From_Weights(W, probe_site)
-            F.append(F_val)
-        return np.arange(0, tf), np.array(F)
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "5f987541",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "class OTOC_Experiment:\n",
+    "    def __init__(self, num_qubits:int , bc_type:str=\"periodic\"):\n",
+    "        \"\"\"\n",
+    "        Attributes\n",
+    "        ----------\n",
+    "        num_qubits: (int) number of qubits in the experiment\n",
+    "        Methods\n",
+    "        --------\n",
+    "        \"\"\"\n",
+    "        self.num_qubits = num_qubits\n",
+    "        self.bc_type = bc_type\n",
+    "        self.X = np.array([[0,1],[1,0]],dtype=complex)\n",
+    "        self.Y = np.array([[0,-1j],[1j,0]],dtype=complex)\n",
+    "        self.Z = np.array([[1,0],[0,-1]],dtype=complex)\n",
+    "\n",
+    "    def Haar_Unitary(self):\n",
+    "        # Returns a single realization of a 2-qubit haar gate based on the KAK/Cartan form\n",
+    "        def Single_Qubit(self):\n",
+    "            #Calculates a realization of the single qubit gate used in the haar unitary\n",
+    "            phi = np.random.uniform(0, 2*np.pi)\n",
+    "            lamda = np.random.uniform(0, 2*np.pi)\n",
+    "            u = np.random.uniform(0, 1)\n",
+    "            theta = np.arccos(1-2*u)\n",
+    "            I2 = np.eye(2)\n",
+    "            Rz_lamda = np.cos(lamda/2)*I2 - 1j*np.sin(lamda/2)*self.Z\n",
+    "            Ry_theta = np.cos(theta/2)*I2 - 1j*np.sin(theta/2)*self.Y\n",
+    "            Rz_phi = np.cos(phi/2)*I2 - 1j*np.sin(phi/2)*self.Z\n",
+    "            return Rz_phi @ Ry_theta @ Rz_lamda\n",
+    "        #Get 2 random realizations of the single qubit rotations\n",
+    "        U1 = Single_Qubit(self)\n",
+    "        U2 = Single_Qubit(self)\n",
+    "        U = np.kron(U1,U2)\n",
+    "        #draw the random angles for the Rxx,Ryy,Rzz\n",
+    "        #Note: the code for drawing the cx,cy,cz was written by chat gpt\n",
+    "        def Sample_Cartan():\n",
+    "            # Jointly samples cx, cy, cz from the Haar-induced Weyl chamber density.\n",
+    "            L = np.pi / 2\n",
+    "            while True:\n",
+    "                ux = np.random.uniform(0, 1)\n",
+    "                uy = np.random.uniform(0, 1)\n",
+    "                uz = np.random.uniform(0, 1)\n",
+    "                ua = np.random.uniform(0, 1)\n",
+    "                cx = L * ux**(1/3)\n",
+    "                cy = cx * np.sqrt(uy)\n",
+    "                cz = cy * (2*uz - 1)\n",
+    "                w = abs(\n",
+    "                    np.sin(cx + cy) * np.sin(cx - cy) *\n",
+    "                    np.sin(cx + cz) * np.sin(cx - cz) *\n",
+    "                    np.sin(cy + cz) * np.sin(cy - cz)\n",
+    "                )\n",
+    "                if ua < 4*w:\n",
+    "                    return cx, cy, cz\n",
+    "        cx,cy,cz = Sample_Cartan()\n",
+    "        #Apply the two-qubit gates Rxx,Ryy,Rzz\n",
+    "        I4 = np.eye(4)\n",
+    "        Rxx = np.cos(cx/2)*I4 - 1j*np.sin(cx/2)*np.kron(self.X,self.X)\n",
+    "        Ryy = np.cos(cy/2)*I4 - 1j*np.sin(cy/2)*np.kron(self.Y,self.Y)\n",
+    "        Rzz = np.cos(cz/2)*I4 - 1j*np.sin(cz/2)*np.kron(self.Z,self.Z)\n",
+    "        U = Rxx @ Ryy @ Rzz @ U\n",
+    "        #Apply the final single qubit gates\n",
+    "        U3 = Single_Qubit(self)\n",
+    "        U4 = Single_Qubit(self)\n",
+    "        U = np.kron(U3,U4) @ U\n",
+    "        return U\n",
+    "    def Measurement_Layer(self,psi_tensor:np.ndarray, p:float,t:int):\n",
+    "        \"\"\"\n",
+    "        Implements a measurement layer where all sites are measured with probability p.\n",
+    "        Inputs\n",
+    "        ------\n",
+    "        psi: (ndarray) quantum state vector\n",
+    "        p: (float) probability of measurement success\n",
+    "        Outputs\n",
+    "        -------\n",
+    "        psi_out: (ndarray) post_measurement state vector\n",
+    "        \"\"\"\n",
+    "        #randomly sample sites to measure\n",
+    "        all_sites = np.arange(self.num_qubits)\n",
+    "        meas_sites = all_sites[np.random.random(self.num_qubits) < p]\n",
+    "        #Don't measure the edge qubits on odd layers for open bcs.\n",
+    "        #Just was convenient with transfer matrix to not have separate local transfer matrix for odd edges.\n",
+    "        if self.bc_type == \"open\" and t % 2 ==1:\n",
+    "            #remove the 0 and N-1 components if they are there.\n",
+    "            meas_sites = meas_sites[(meas_sites != 0) & (meas_sites != self.num_qubits - 1)]\n",
+    "        def Measure(psi_tensor:np.ndarray, site:int, num_qubits:int):\n",
+    "            \"\"\"\n",
+    "            Does a single mid-circuit measurement\n",
+    "            \"\"\"\n",
+    "            #calculate the up probability\n",
+    "            p_up = np.sum(np.abs(np.take(psi_tensor, 0, axis=site))**2).real\n",
+    "            # get a random measurement outcome and the associated probability\n",
+    "            outcome = 0 if np.random.random() < p_up else 1\n",
+    "            prob = p_up if outcome == 0 else 1.0 - p_up\n",
+    "            # Build slice selecting the measured axis.\n",
+    "            sl = [slice(None)] * num_qubits\n",
+    "            # Zero out incompatible component.\n",
+    "            sl[site] = 1 - outcome\n",
+    "            psi_new = psi_tensor.copy()\n",
+    "            psi_new[tuple(sl)] = 0.0\n",
+    "            # Renormalize compatible component.\n",
+    "            psi_new /=np.sqrt(prob)\n",
+    "            #return the updated state, that is all we need\n",
+    "            return psi_new\n",
+    "        #Implement the measurements\n",
+    "        for site in meas_sites:\n",
+    "            psi_tensor = Measure(psi_tensor, site, self.num_qubits)\n",
+    "        return psi_tensor\n",
+    "\n",
+    "    def Apply_Paulis(self,psi:np.ndarray,probe_site:int):\n",
+    "        \"\"\"\n",
+    "        \"\"\"\n",
+    "        #Apply random paulis to all sites except for the probe site\n",
+    "        I2 = np.eye(2)\n",
+    "        paulis = [I2,self.X,self.Y,self.Z]\n",
+    "        #which gate to apply to which site\n",
+    "        gate = np.random.randint(0, 4, size=self.num_qubits)\n",
+    "        #Apply identity to the probe site.\n",
+    "        gate[probe_site] = 0\n",
+    "        psi_tensor = psi.reshape([2] * self.num_qubits)\n",
+    "        for site in range(self.num_qubits):\n",
+    "            P = paulis[gate[site]]\n",
+    "            psi_tensor = np.tensordot(P, psi_tensor, axes=([1], [site]))\n",
+    "            psi_tensor = np.moveaxis(psi_tensor, 0, site)\n",
+    "        return psi_tensor.reshape(-1)\n",
+    "\n",
+    "    #Note:code apply_two_site_gate was written by Chat gpt\n",
+    "    def apply_two_site_gate(self, psi_tensor: np.ndarray, U: np.ndarray, j: int, k: int):\n",
+    "        \"\"\"\n",
+    "        Apply a 4x4 two-qubit gate U to sites j and k of psi_tensor.\n",
+    "        \"\"\"\n",
+    "        N = psi_tensor.ndim\n",
+    "        # Convert negative periodic labels like -1 to N-1\n",
+    "        j = j % N\n",
+    "        k = k % N\n",
+    "        if j == k:\n",
+    "            raise ValueError(\"j and k must be different sites.\")\n",
+    "        U_tensor = U.reshape(2, 2, 2, 2)\n",
+    "        psi_new = np.tensordot(U_tensor, psi_tensor, axes=([2, 3], [j, k]))\n",
+    "        remaining = [ax for ax in range(N) if ax not in (j, k)]\n",
+    "        current_axes = [\"out_j\", \"out_k\"] + remaining\n",
+    "        target_axes = []\n",
+    "        for ax in range(N):\n",
+    "            if ax == j:\n",
+    "                target_axes.append(\"out_j\")\n",
+    "            elif ax == k:\n",
+    "                target_axes.append(\"out_k\")\n",
+    "            else:\n",
+    "                target_axes.append(ax)\n",
+    "        perm = [current_axes.index(ax) for ax in target_axes]\n",
+    "        psi_new = np.transpose(psi_new, perm)\n",
+    "        return psi_new\n",
+    "\n",
+    "    def Brickwall(self, psi:np.ndarray, U_mats,p,reverse= False):\n",
+    "        \"\"\"\n",
+    "        \"\"\"\n",
+    "        t = len(U_mats)\n",
+    "        #Apply the first unitary layer\n",
+    "        psi_tensor = psi.reshape([2] * self.num_qubits)\n",
+    "        if reverse:\n",
+    "            U_layer = U_mats[-1]\n",
+    "            if (t-1) % 2 == 0:\n",
+    "                for j in range(self.num_qubits//2):\n",
+    "                    psi_tensor = self.apply_two_site_gate(psi_tensor, U_layer[j], 2*j, 2*j+1)\n",
+    "            else:\n",
+    "                if self.bc_type == \"periodic\":\n",
+    "                    j_start = 0\n",
+    "                elif self.bc_type == \"open\":\n",
+    "                    j_start = 1\n",
+    "                else:\n",
+    "                    raise ValueError(\"self.bc must be either 'open' or 'periodic'.\")\n",
+    "\n",
+    "                for j in range(j_start, self.num_qubits//2):\n",
+    "                    psi_tensor = self.apply_two_site_gate(psi_tensor, U_layer[j], 2*j-1, 2*j)\n",
+    "        else:\n",
+    "            U_layer = U_mats[0]\n",
+    "            for j in range(self.num_qubits//2):\n",
+    "                psi_tensor = self.apply_two_site_gate(psi_tensor, U_layer[j], 2*j, 2*j+1)\n",
+    "\n",
+    "        #Apply alternating layers of measurement and unitaries.\n",
+    "        for tp in range(t-1):\n",
+    "            if reverse:\n",
+    "                tp = t-tp-2\n",
+    "            else:\n",
+    "                tp = tp+1\n",
+    "            U_layer = U_mats[tp]\n",
+    "            #implement the measurements for this layer\n",
+    "            psi_tensor = self.Measurement_Layer(psi_tensor,p,tp)\n",
+    "            #implement the unitaries for this layer\n",
+    "            if tp % 2 == 0:\n",
+    "                for j in range(self.num_qubits//2):\n",
+    "                    psi_tensor = self.apply_two_site_gate(psi_tensor, U_layer[j], 2*j, 2*j+1)\n",
+    "            else:\n",
+    "                if self.bc_type == \"periodic\":\n",
+    "                    j_start = 0\n",
+    "                elif self.bc_type == \"open\":\n",
+    "                    j_start = 1\n",
+    "                else:\n",
+    "                    raise ValueError(\"self.bc must be either 'open' or 'periodic'.\")\n",
+    "\n",
+    "                for j in range(j_start, self.num_qubits//2):\n",
+    "                    psi_tensor = self.apply_two_site_gate(psi_tensor, U_layer[j], 2*j-1, 2*j)\n",
+    "        return psi_tensor.reshape(-1)\n",
+    "\n",
+    "    def OTOC_Shot(self,t:int, pert_site:int, probe_site:int, pert_op:np.ndarray,p:float):\n",
+    "            \"\"\"\n",
+    "            \"\"\"\n",
+    "            d=2**self.num_qubits\n",
+    "            psi = np.zeros(d, dtype = complex)\n",
+    "            psi[0] = 1.0\n",
+    "            psi = self.Apply_Paulis(psi,probe_site)\n",
+    "            #generate all of the haar random unitary matrices\n",
+    "            U_mats = []\n",
+    "            U_dagger_mats = []\n",
+    "            for tp in range(t+1):\n",
+    "                U_layer = []\n",
+    "                U_dagger_layer = []\n",
+    "                for j in range((self.num_qubits)//2):\n",
+    "                    U2q = self.Haar_Unitary()\n",
+    "                    U_layer.append(U2q)\n",
+    "                    U_dagger_layer.append(U2q.conj().T)\n",
+    "                U_mats.append(U_layer)\n",
+    "                U_dagger_mats.append(U_dagger_layer)\n",
+    "            #do the brickwall simulation\n",
+    "            psi = self.Brickwall(psi, U_mats,p,reverse = False)\n",
+    "            #Apply the perturbation\n",
+    "            psi_tensor = psi.reshape([2] * self.num_qubits)\n",
+    "            psi_tensor = np.tensordot(pert_op, psi_tensor, axes=([1], [pert_site]))\n",
+    "            psi_tensor = np.moveaxis(psi_tensor, 0, pert_site)\n",
+    "            psi = psi_tensor.reshape(-1)\n",
+    "            #do the brickwall simulation\n",
+    "            psi = self.Brickwall(psi, U_dagger_mats,p,reverse = True)\n",
+    "            psi_tensor = psi.reshape([2] * self.num_qubits)\n",
+    "            p_up = np.sum(np.abs(np.take(psi_tensor, 0, axis=probe_site))**2).real\n",
+    "            result = +1 if np.random.random() < p_up else -1\n",
+    "            return result\n",
+    "\n",
+    "    def OTOC(self, p:float,tf:int, pert_site:int, probe_site:int,num_points:int, num_shots:int):\n",
+    "        \"\"\"\n",
+    "        \"\"\"\n",
+    "        tvals = np.linspace(0,tf,num_points).astype(int)\n",
+    "        #OTOC Values\n",
+    "        C=[]\n",
+    "        for t in tqdm(tvals):\n",
+    "            Ct = 0\n",
+    "            for n in range(num_shots):\n",
+    "                #Calculate the two terms in OTOC shots.\n",
+    "                Q = self.OTOC_Shot(t, pert_site, probe_site, self.X,p)\n",
+    "                I2 = np.eye(2)\n",
+    "                R = self.OTOC_Shot(t, pert_site, probe_site, I2,p)\n",
+    "                Ct+=R-Q\n",
+    "            Ct/=num_shots\n",
+    "            C.append(2*Ct)\n",
+    "        return tvals,C"
+   ]
+  }
+ ],
+ "metadata": {
+  "language_info": {
+   "name": "python"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

@@ -60,6 +60,12 @@ test = [
     "pytest-order",
     "pytest-reportlog",
 ]
+gpu = [
+    # CUDA-enabled AerSimulator device="GPU" support for the cluster
+    # light-cone sweep (src/lightcone_cluster_worker.py --gpu). Cluster-
+    # only: needs a CUDA toolkit on the node, not installed by default.
+    "qiskit-aer-gpu",
+]
 
 [project.readme]
 file = "README.md"

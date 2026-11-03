@@ -24,12 +24,80 @@ C(t) = ⟨Z_probe⟩_unperturbed  −  ⟨Z_probe⟩_perturbed
 ```
 
 - **p = 0**: unitary dynamics, fast scrambling — C(t) grows toward 1.
-- **large p**: measurements localise information (quantum Zeno) — C(t) is
-  suppressed.
-- **phase transition**: between these two regimes at a critical p*.
+- **large p**: measurements localise information (quantum Zeno) — C(t) is suppressed.
+- **phase transition**: between these two regimes at a critical p\*.
 
 The disorder average over gate angles, initial Pauli words, and measurement
 sites reduces shot noise and isolates the universal scrambling signal.
+
+---
+
+## Local simulation vs Quantinuum hardware
+
+The codebase supports two execution backends selected by a single config flag.
+The core function `_run_circuits` in `src/__main__.py` detects which backend is
+in use and takes the appropriate path automatically.
+
+### Local simulation (AerBackend)
+
+Set `DEVICE_NAME = None` in `run_disorder_avg.py`.
+
+```
+build_otoc_circuit(...)
+        │
+        ▼
+_run_circuits(circuits, AerBackend(), n_shots, ...)
+        │
+        ├─ backend.get_compiled_circuit(qc, optimisation_level=N)   [pytket]
+        ├─ backend.process_circuits(compiled, n_shots=[...])         [pytket]
+        └─ backend.get_result(handle).get_shots()                    [pytket]
+```
+
+- No authentication required.
+- Runs entirely in-process; results are returned immediately.
+- Noise model optional: set `NOISE_P1Q`, `NOISE_P2Q`, `NOISE_PM`, `NOISE_T1`,
+  `NOISE_T2` to add depolarizing / T1/T2 / readout noise via
+  `build_aer_noise_model(...)`.
+- Ideal (noiseless) by default when all `NOISE_*` are `None`.
+
+### Quantinuum hardware / emulator (Nexus API)
+
+Set `DEVICE_NAME = "H2-1"` (hardware) or `"H2-1E"` (emulator) in
+`run_disorder_avg.py`, or set `DEVICE_NAME` in `run_h2_hardware_test.py`.
+
+```
+build_otoc_circuit(...)
+        │
+        ▼
+_run_circuits(circuits, QuantinuumBackend("H2-1"), n_shots, ...)
+        │
+        ├─ qnx.login_with_credentials()          [Nexus auth — prompts in terminal]
+        ├─ qnx.projects.get_or_create(name=...)  [create/reuse Nexus project]
+        ├─ qnx.circuits.upload(...)              [upload raw circuits to Nexus]
+        ├─ qnx.start_compile_job(...)            [compile on Nexus, wait]
+        ├─ qnx.start_execute_job(               [execute as one batched job]
+        │       attempt_batching=True,           ← one hardware queue slot
+        │       batch_id=uuid4(), ...)
+        └─ item.download_result().get_shots()    [pull shot arrays from Nexus]
+```
+
+- Requires a Quantinuum Nexus account and credentials.
+- All circuits in a `_run_circuits` call share **one hardware queue slot**
+  (`attempt_batching=True`) — this is critical for minimising wait time and HQC overhead.
+- The Nexus project name is controlled by `nexus_project` (default
+  `"schmetterling-effect"`).
+- Noise model parameters (`NOISE_*`) are ignored on hardware; the device provides
+  its own noise.
+
+### Switching between backends
+
+| What to change | Local (Aer) | Hardware |
+|---|---|---|
+| `DEVICE_NAME` | `None` | `"H2-1"` or `"H2-1E"` |
+| `NOISE_*` | set as desired | ignored |
+| Auth needed | no | yes (`qnx.login_with_credentials()`) |
+| Noise model | `build_aer_noise_model(...)` | device native |
+| Batching | `process_circuits` (in-process) | Nexus execute job |
 
 ---
 
@@ -39,7 +107,9 @@ sites reduces shot noise and isolates the universal scrambling signal.
 src/
   __main__.py              — core library: circuit generation, sweeps, plotting
   run_disorder_avg.py      — experiment orchestrator (config + parallel schemes)
+  run_h2_hardware_test.py  — minimal end-to-end hardware test script
   transfer_matrix_otoc.py  — exact analytical OTOC via Pauli-weight transfer matrix
+  probe_compiled_gate_counts.py — gate-count and HQC probe via Nexus
 notebooks/
   estimate_gate_count.ipynb
 figs/                      — output figures (auto-created)
@@ -55,8 +125,8 @@ The core library.  All public functions are importable.
 
 | Function | Purpose |
 |---|---|
-| `generate_time_reversal_breaking_random_brick_wall(...)` | Build one perturbed or unperturbed echo circuit |
-| `_run_circuits(circuits, backend, n_shots, tags)` | Compile and batch-submit circuits to a pytket backend |
+| `build_otoc_circuit(...)` | Build one perturbed or unperturbed Loschmidt-echo circuit |
+| `_run_circuits(circuits, backend, n_shots, ...)` | Compile and batch-submit; routes to Nexus or Aer automatically |
 | `sweep_single_shot_disorder(...)` | Disorder average: each sample is a fresh independent circuit, 1 shot |
 | `sweep_over_all_disorder_axes(...)` | Disorder average: fixed circuit realizations × `N_SHOTS` shots each |
 | `compute_C_t(raw)` | Compute C, variance, standard error, CV from raw realization arrays |
@@ -109,9 +179,10 @@ functions read from module-level globals.
 | `N_SHOTS` | `100` | Shots per circuit in multi-shot mode |
 | `BASE_SEED` | `42` | Root RNG seed |
 | `MEAS_SEED` | `7` | Root measurement RNG seed |
+| `OPTIMISATION_LEVEL` | `0` | pytket compilation level (0 = minimal, 1 = light, 2 = full) |
 | `PERT_OP` | `"X"` | Perturbation gate (`"X"/"Y"/"Z"/"H"/"S"/"T"` or `"measure"`) |
 | `PROBE_ANGLE` | `0.0` | Ry half-turns on probe qubit |
-| `DEVICE_NAME` | `None` | `None` → local AerBackend; `"H2-1LE"` → Quantinuum hardware |
+| `DEVICE_NAME` | `None` | `None` → local AerBackend; `"H2-1"` / `"H2-1E"` → Nexus/hardware |
 
 **Noise model** (local AerBackend only; all `None` = ideal)
 
@@ -125,8 +196,7 @@ functions read from module-level globals.
 | `NOISE_T_1Q` | `50e-9` | Single-qubit gate duration (seconds) |
 | `NOISE_T_2Q` | `300e-9` | Two-qubit gate duration (seconds) |
 
-Depolarizing and thermal-relaxation channels compose automatically when both
-are set.
+Depolarizing and thermal-relaxation channels compose automatically when both are set.
 
 **Transfer-matrix overlay** (set `TM_NUM_QUBITS = None` to skip entirely)
 
@@ -184,6 +254,21 @@ python src/run_disorder_avg.py --estimate-hqc --mode multi_shot
 
 ---
 
+### `src/run_h2_hardware_test.py`
+
+Minimal end-to-end test for a single (N, p) point on Quantinuum hardware or
+emulator.  Builds circuits, submits as one batched Nexus job, retrieves results,
+and plots C(t).
+
+```bash
+python src/run_h2_hardware_test.py
+```
+
+Edit the CONFIG block at the top to change device, qubit count, depths, or shots.
+Swap `DEVICE_NAME = "H2-1E"` to run on the emulator before spending hardware credits.
+
+---
+
 ### `src/transfer_matrix_otoc.py`
 
 Exact disorder-averaged OTOC via the classical Pauli-weight transfer matrix.
@@ -223,11 +308,15 @@ match the normalisation convention of the quantum circuit experiment.
 
 ## Output figures
 
+All figures are written to `figs/` at the repo root (path is anchored to the
+script location, not the working directory).
+
 | File | Contents |
 |---|---|
 | `figs/C_vs_t_<DATE>.png` | Three-panel: C vs T (varying N), C vs p (varying N), C vs T (varying p) |
 | `figs/cv_vs_t_<DATE>.png` | Same layout for CV = √Var / \|C\| (self-averaging diagnostic) |
 | `figs/qc_vs_tm_<DATE>.png` | One panel per p: QC errorbars for all N overlaid with exact TM curve |
+| `figs/h2_test_<DATE>.png` | C(t) from hardware test with shot-noise errorbars |
 
 ---
 
@@ -235,7 +324,7 @@ match the normalisation convention of the quantum circuit experiment.
 
 - `pytket` — circuit IR and compilation
 - `pytket-extensions-qiskit` — AerBackend (local simulation)
-- `pytket-extensions-quantinuum` — QuantinuumBackend (hardware)
+- `pytket-extensions-quantinuum` — QuantinuumBackend (type token for hardware detection)
 - `qiskit-aer` — Aer simulator + noise models
-- `qnexus` — Quantinuum Nexus authentication
+- `qnexus` — Quantinuum Nexus API (upload, compile, execute, retrieve)
 - `numpy`, `matplotlib`

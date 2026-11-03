@@ -7,3 +7,6 @@
 *err
 partials/*
 tmp/*
+notebooks/*
+figs/*.png
+.claude
