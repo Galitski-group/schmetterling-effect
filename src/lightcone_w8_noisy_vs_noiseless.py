@@ -38,7 +38,7 @@ import sys
 import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 
 W = 8
 L_VALUES = list(range(1, 9))

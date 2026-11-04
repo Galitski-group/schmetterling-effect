@@ -18,7 +18,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import numpy as np
 import matplotlib.pyplot as plt
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 
 CHECKPOINT_PATH = str(pathlib.Path(R.PARTIALS_DIR) / "lightcone_h2_2_tiled_checkpoint.pkl")
 FIGURE_PATH = str(R.FIGURE_DIR / "lightcone_probe_all_h2_2.png")

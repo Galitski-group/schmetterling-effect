@@ -19,7 +19,7 @@ import sys
 import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 
 CHECKPOINT_PATH = str(pathlib.Path(R.PARTIALS_DIR) / "lightcone_h2_2_tiled_checkpoint.pkl")
 RAW_RESULTS_PATH = str(pathlib.Path(R.PARTIALS_DIR) / "lightcone_h2_2_tiled_raw_results.pkl")

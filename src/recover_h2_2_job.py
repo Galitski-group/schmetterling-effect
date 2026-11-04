@@ -33,7 +33,7 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import numpy as np
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 
 # ── Must match the ORIGINAL run_h2_2_tiled.py submission for this point ──────
 W = 8

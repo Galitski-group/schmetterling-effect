@@ -81,7 +81,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import numpy as np
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 from pytket.extensions.qiskit import AerBackend
 
 N_VALUES = [8, 10, 12, 14, 16]

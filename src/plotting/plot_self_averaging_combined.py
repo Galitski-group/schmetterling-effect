@@ -23,9 +23,9 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import matplotlib.pyplot as plt
-import run_disorder_avg as R
-import self_averaging_scan as S
-import self_averaging_time_trace as T
+import runs.run_disorder_avg as R
+import error.self_averaging_scan as S
+import error.self_averaging_time_trace as T
 
 FIGURE_PATH = str(pathlib.Path(R.FIGURE_DIR) / "self_averaging_combined.png")
 PANEL_LABEL_FONTSIZE = 18

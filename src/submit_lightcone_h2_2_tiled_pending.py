@@ -39,7 +39,7 @@ import sys
 import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import run_disorder_avg as R
+import runs.run_disorder_avg as R
 
 W = 8
 N_QUBITS_BUDGET = 48
