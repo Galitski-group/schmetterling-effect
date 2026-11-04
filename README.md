@@ -16,8 +16,9 @@ We do this three ways and compare them:
 This README assumes you know what a qubit and a quantum gate are. Everything
 else is introduced as it comes up.
 
-> **Repository status (November 2026).** Scripts were recently reorganized into
-> subfolders and some are broken until their paths are updated. Read
+> **Repository status (November 2026).** Scripts now live in subfolders by purpose
+> (see [How the repository is organized](#how-the-repository-is-organized)), but
+> many internal paths still point to the old locations. Read
 > [Current state of the code](#current-state-of-the-code) before running anything
 > other than the quickstart.
 
@@ -181,7 +182,8 @@ d = np.array(d, dtype=float)
 print(f"C = {d.mean():.3f} +/- {d.std(ddof=1) / np.sqrt(n):.3f}")
 ```
 
-One run printed `C = 0.527 +/- 0.051`. Try changing `L`, or setting `p = 0.05`.
+Expect about `C = 0.53 +/- 0.05`; the exact value changes slightly between runs. Try
+changing `L`, or setting `p = 0.05`.
 
 ### Setup
 
@@ -190,8 +192,11 @@ make butterfly                  # creates the .butterfly virtual environment
 source .butterfly/bin/activate
 ```
 
-Python 3.10 or newer is required. `pyproject.toml` also expects a `LICENSE` file
-that is not in the repository, which may interfere with a fresh install.
+Python 3.10 or newer is required. This installs the project in editable mode, which
+puts `src/` on Python's import path; scripts that use `import runs.…` rely on that.
+
+Run every command from the repository root, because several scripts use paths like
+`partials/…` relative to where you launch them.
 
 ---
 
@@ -263,9 +268,9 @@ accounts for this by bootstrapping whole circuits.
 Jobs can sit queued for days, so don't wait on them one at a time:
 
 ```text
-submit_lightcone_h2_2_tiled_pending.py    submit everything, then exit
-harvest_lightcone_h2_2_tiled_pending.py   collect finished jobs; safe to rerun
-recover_h2_2_job.py                       rescue one job if its local process died
+src/submit_lightcone_h2_2_tiled_pending.py    submit everything, then exit
+src/harvest_lightcone_h2_2_tiled_pending.py   collect finished jobs; safe to rerun
+src/recover_h2_2_job.py                       rescue one job if its local process died
 ```
 
 ### From outcomes to error bars
@@ -277,42 +282,113 @@ runs can resume and figures can be remade without new runs.
 
 ---
 
-## Repository map
+## How the repository is organized
+
+The folders follow the path a result takes, from raw circuits to a figure with
+error bars:
 
 ```text
-src/
-  __main__.py                  Core library: circuits, execution, statistics, plots
-  open_brickwall_otoc.py       Theory class; Monte Carlo run for N = 2000
-  open_brickwall_otoc_exact_tm_run.py   Same class; small exact run for N = 8
-  tm_eigvals.py                Transfer-matrix eigenvalues versus p
-  transfer_matrix_otoc.py      Older theory module (see Current state)
-  lightcone_paper_w18.py       W=18 noiseless light cone for the paper
-  lightcone_w8_noisy_vs_noiseless.py    Simulator companion to the hardware run
-  front_width_scaling.py       Does the front's width follow a KPZ-like power law?
-  submit_… / harvest_… / recover_…      Hardware queue tools
-  probe_compiled_gate_counts.py         Gate counts after compilation
-
-  runs/      Experiment scripts; run_disorder_avg.py is the main orchestrator
-  plotting/  Turn saved data into figures
-  error/     Error analysis, null tests, self-averaging studies
-  zaratan/   Plan, run and merge large sweeps on the Zaratan cluster
-
-slurm/       Cluster job scripts
-tests/       Test suite
-notebooks/   Exploratory notebooks (ignored by git)
-partials/    Saved data and checkpoints (ignored by git)
-figs/        Output figures; figs/paper_figs/ holds the paper's
-tmp/         Logs and temporary tables (ignored by git)
+src/__main__.py          circuits, execution, statistics
+        │
+        ▼
+src/runs/  src/zaratan/  run experiments, on a laptop, hardware or cluster
+        │
+        ▼
+partials/                saved outcomes and checkpoints
+        │
+        ├──────────────▶ src/plotting/  →  figs/
+        └──────────────▶ src/error/     →  uncertainties and checks
 ```
+
+Separating data from figures means you can restyle a plot without rerunning
+anything, which matters when the data took days on a quantum computer.
+
+### `src/`: the core and the top-level experiments
+
+| File | What it does |
+|---|---|
+| `__main__.py` | The core library: circuit builders, `_run_circuits`, `compute_C_t` |
+| `open_brickwall_otoc.py` | Theory class, plus the Monte Carlo run for N = 2000 |
+| `open_brickwall_otoc_exact_tm_run.py` | The same class, plus the exact N = 8 run |
+| `tm_eigvals.py` | Transfer-matrix eigenvalues versus `p` |
+| `transfer_matrix_otoc.py` | Older theory module (see [Current state](#current-state-of-the-code)) |
+| `lightcone_paper_w18.py` | W=18 noiseless light cone for the paper |
+| `lightcone_w8_noisy_vs_noiseless.py` | Simulator companion to the W=8 hardware run |
+| `front_width_scaling.py` | Tests whether the front's width follows a KPZ-like power law |
+| `submit_…`, `harvest_…`, `recover_…` | Hardware queue tools |
+| `probe_compiled_gate_counts.py` | Gate counts after compilation |
+
+### `src/runs/`: scripts that produce data
+
+Start with `run_disorder_avg.py`. It is the main orchestrator, and most other
+scripts import it for its sweeps, noise settings and paths.
+
+| Scripts | Purpose |
+|---|---|
+| `run_h2_hardware_test.py` | Smallest end-to-end hardware test |
+| `run_h2_2_tiled.py` | Tiled single-site OTOC on H2-2 |
+| `run_lightcone_h2_2_tiled.py` | Tiled light cone on H2-2 |
+| `run_lightcone_local.py`, `run_lightcone_probe_all_local.py` | Small local light cones |
+| `run_lightcone_probe_all_w8_hw_*` | Local rehearsals at the hardware size; `anchored` and `anchored_odd` fix the layer parity at the perturbation |
+| `run_lightcone_probe_all_w8_tiled_local*` | Tests the tiling code locally before using hardware |
+| `run_lightcone_probe_all_w18_*` | W=18 comparisons; `p05` adds `p = 0.05` |
+| `run_variance_scaling_test.py` | Projects how many realizations a larger system would need |
+
+Most of these come in `_noisy` and `_noiseless` pairs, which differ only in whether
+the noise model is on.
+
+### `src/plotting/`: data to figures
+
+These read saved data and run no circuits.
+
+| Script | Figure |
+|---|---|
+| `plot_h2_2_vs_tm_simulation.py` | Single-site hardware data against the current theory curves |
+| `plot_h2_2_results.py`, `plot_h2_2_vs_tm_styles.py`, `plot_h2_2_normalized.py` | Earlier versions of that comparison |
+| `plot_lightcone_h2_2_tiled.py`, `plot_lightcone_paper_w18.py` | Light-cone heatmaps |
+| `plot_open_otoc.py` | N = 2000 OTOC and Gaussian limit |
+| `plot_eigvals.py` | Eigenvalues versus `p` |
+| `plot_self_averaging_combined.py` | Three-panel self-averaging figure |
+
+### `src/error/`: how much to trust the results
+
+| Script | What it answers |
+|---|---|
+| `stat_checks_hardware.py` | Do the null tests pass, and does the data agree with theory? |
+| `error_analysis_lightcone_paper_w18.py` | Standard errors for the W=18 light cone |
+| `error_analysis_open_otoc.py` | A conditional error bound for the N = 2000 data |
+| `self_averaging_scan.py` | How do relative fluctuations change with system size? |
+| `self_averaging_time_trace.py` | How do they change with depth at N = 16? |
+
+### `src/zaratan/` and `slurm/`: large sweeps on a cluster
+
+`src/zaratan/` holds the Python for the Zaratan cluster, and `slurm/` holds the job
+scripts that launch it. See [Running larger sweeps](#running-larger-sweeps-on-a-cluster).
+
+### Everything else
+
+| Folder | Contents | In git? |
+|---|---|---|
+| `partials/` | Saved data and checkpoints | No |
+| `figs/` | Where scripts save figures | No |
+| `figs/paper_figs/` | Figures selected for the paper | Yes |
+| `figs/error_figs/` | Empty so far; the error scripts still save to `figs/` | Empty |
+| `tmp/` | Logs and temporary tables | No |
+| `notebooks/` | Exploratory notebooks | Only `calculate_nuotoc` and `run_experiment` |
+| `tests/` | Test suite | Yes |
+| `mnist_data/` | Dataset left over from the QNN work, which has moved out of this repo | Yes |
 
 `partials/` is not in git, so a fresh clone has no data. Plotting and analysis
 scripts need a copy of it.
 
 ### Which script makes which result
 
+Paths are relative to `src/`.
+
 | Result | Generate the data | Make the figure |
 |---|---|---|
 | Single-site OTOC on hardware | `runs/run_h2_2_tiled.py` | `plotting/plot_h2_2_vs_tm_simulation.py` |
+| Theory curves for that figure | `open_brickwall_otoc_exact_tm_run.py` | same figure |
 | Light cone on hardware | `runs/run_lightcone_h2_2_tiled.py` or submit/harvest | `plotting/plot_lightcone_h2_2_tiled.py` |
 | W=8 light cone in simulation | `lightcone_w8_noisy_vs_noiseless.py` | same script |
 | W=18 light cone | `lightcone_paper_w18.py` | `plotting/plot_lightcone_paper_w18.py` |
@@ -345,8 +421,10 @@ independently:
 plan (task table)  →  array of workers  →  reduce (merge into a checkpoint + figure)
 ```
 
-Reduce can run mid-sweep and reports what is missing. The Slurm files currently
-call the old script paths; see below.
+These steps are `src/zaratan/lightcone_cluster_plan.py`,
+`lightcone_cluster_worker.py` and `lightcone_cluster_reduce.py`, launched by
+`slurm/submit_all.sh`. Reduce can run mid-sweep and reports what is missing. The
+Slurm files currently call the old script paths; see below.
 
 ---
 
@@ -382,26 +460,35 @@ and the hardware error bars are large.
 
 **Known limits on error bars**
 
-- `partials/open_otoc.json` stores only means, so `error/error_analysis_open_otoc.py`
-  gives only a conditional bound, not a true standard error.
+- `partials/open_otoc.json` stores only means, so
+  `src/error/error_analysis_open_otoc.py` gives only a conditional bound, not a true
+  standard error.
 - The self-averaging checkpoints store summaries, so their error bars need reruns.
 
 ---
 
 ## Current state of the code
 
-Everything here was tested in November 2026, after the move into subfolders.
+Checked in November 2026, after the move into subfolders. Scripts marked as
+blocked fail on import. The others in the broken rows import fine and fail, or write
+to the wrong place, when run.
 
 | Status | What | Why |
 |---|---|---|
 | Works | Quickstart and `src/__main__.py` | no dependence on moved files |
-| Works | `error/stat_checks_hardware.py` (run from repo root) | reads `partials/` directly |
-| Broken | Anything importing `runs/run_disorder_avg.py` | looks for `src/runs/__main__.py`, which is one folder too deep |
-| Broken | `src/transfer_matrix_otoc.py` | contains notebook JSON rather than Python, and `run_disorder_avg.py` also needs it, in the wrong folder |
-| Broken | `plotting/plot_open_otoc.py`, `plot_eigvals.py`, `plot_h2_2_vs_tm_simulation.py` | look for data in `src/partials/` |
-| Broken | Scripts that add their own folder to `sys.path` and then `import runs.…` | `runs` is only importable from `src/` |
+| Works | `src/error/stat_checks_hardware.py` | reads `partials/` directly, relative to the repo root |
+| Blocked | `src/runs/run_disorder_avg.py` and everything importing it | looks for `src/runs/__main__.py`, one folder too deep |
+| Blocked | `src/runs/run_h2_hardware_test.py` | same wrong path to `__main__.py` |
+| Broken | `src/transfer_matrix_otoc.py` | contains notebook JSON rather than Python; `run_disorder_avg.py` also looks for it in `src/runs/` |
+| Broken | `plot_open_otoc.py`, `plot_eigvals.py`, `plot_h2_2_vs_tm_simulation.py` | look for data in `src/partials/` and would save to `src/figs/` |
+| Broken | `FIGURE_DIR` in `run_disorder_avg.py` | resolves to `src/figs/`, so it needs fixing alongside the import |
+| Broken | `src/zaratan/lightcone_cluster_plan.py` | writes its task table under `src/slurm/` |
 | Broken | `slurm/` jobs | call `src/lightcone_cluster_*.py`, now in `src/zaratan/` |
-| Broken | `tests/` | fails at collection with `No module named 'tests.helpers'` |
+| Broken | `tests/` | an installed package provides its own top-level `tests` module, which hides this repo's, so collection fails with `No module named 'tests.helpers'` |
+
+Many scripts also add their own folder to `sys.path` before `import runs.…`. That
+line no longer does anything useful, and the import works only because of the
+editable install.
 
 ---
 

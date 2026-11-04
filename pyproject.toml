@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "schmetterling"
-description = ""
+description = "Disorder-averaged OTOCs in random brick-wall circuits with mid-circuit measurements"
 authors = [ {name="Djamil Lakhdar-Hamina", email = "dlakhdar@umd.edu"} ,
             {name="Paul Argyle", email="pargyle@umd.edu"}]
 
@@ -16,24 +16,21 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
-    "Programming Language :: Pythosn",
+    "Programming Language :: Python",
     "Topic :: Utilities",
 ]
 
 dependencies = [
     "numpy",
+    "scipy",
     "matplotlib",
     "pytket",
     "pytket-quantinuum",
     "pytket-qiskit",
     "pytket-pecos",
     "qiskit-aer",
-    "pecos",
     "qnexus",
 ]
-
-[project.license]
-file = "LICENSE"
 
 [project.optional-dependencies]
 dev = [
@@ -62,7 +59,7 @@ test = [
 ]
 gpu = [
     # CUDA-enabled AerSimulator device="GPU" support for the cluster
-    # light-cone sweep (src/lightcone_cluster_worker.py --gpu). Cluster-
+    # light-cone sweep (src/zaratan/lightcone_cluster_worker.py --gpu). Cluster-
     # only: needs a CUDA toolkit on the node, not installed by default.
     "qiskit-aer-gpu",
 ]
@@ -70,9 +67,6 @@ gpu = [
 [project.readme]
 file = "README.md"
 content-type = "text/markdown"
-
-#[project.scripts]
-#brick_wall_net = "brick_wall_net.__main__:main"
 
 [tool.isort]
 profile = "black"
